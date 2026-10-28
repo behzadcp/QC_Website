@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "GC Website": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker"
+    }
+  }
+}
