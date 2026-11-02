@@ -264,6 +264,7 @@ namespace GC_Website.Crawler
             foreach (var device in _devices)
             {
                 var page = await OpenPageAsync(device);
+
                 var imagesDirectory = Path.Combine(siteDirectory, device.Name);
                 Directory.CreateDirectory(imagesDirectory);
 
@@ -271,8 +272,14 @@ namespace GC_Website.Crawler
                 for (int i = 0; i < totalPageHeight; i += device.Height)
                 {                                                    
 
-                    await page.WaitForTimeoutAsync(5000);
+                    await page.WaitForTimeoutAsync(6000);
 
+                    await page.EvaluateAsync(@"
+                        const el = document.querySelector('.veriAltBar');
+                        if (el) {
+                            el.style.display = 'none';
+                        }
+                    ");
                     var fileName =
                         $"{Sanitize(device.Name)}_" +
                         $"{device.Width}x{i}.png";

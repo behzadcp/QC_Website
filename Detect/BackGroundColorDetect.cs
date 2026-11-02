@@ -191,7 +191,7 @@ namespace GC_Website.Detect
 
 
 
-        public List<Rect> FindMultipleNonBackgroundBoxes(string imagePath, Scalar backgroundColor, double threshold = 10.0, int minArea = 100)
+        public List<Rect> FindMultipleNonBackgroundBoxes(string imagePath, Scalar backgroundColor, double threshold = 8.0, int minArea = 100)
         {
             Mat img = Cv2.ImRead(imagePath);
 
@@ -207,8 +207,7 @@ namespace GC_Website.Detect
             Cv2.CvtColor(diff, gray, ColorConversionCodes.BGR2GRAY);
 
             Mat mask = new Mat();
-            Cv2.Threshold(gray, mask, threshold, 50, ThresholdTypes.Binary);
-
+            Cv2.Threshold(gray, mask, threshold, 150, ThresholdTypes.Binary);
             // Step 4: Optional morphological operations to clean up small noise holes or specs
             Mat kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(3, 3));
             Cv2.MorphologyEx(mask, mask, MorphTypes.Open, kernel);
@@ -230,7 +229,7 @@ namespace GC_Website.Detect
                 if (area > minArea)
                 {
                     Rect box = Cv2.BoundingRect(contour);
-                    if (box.Height > 100 && box.Width > 100)
+                    if (box.Height > 50 && box.Width > 100)
                         boxes.Add(box);
                 }
             }
@@ -342,6 +341,9 @@ namespace GC_Website.Detect
                 foreach (var box in boxes)
                 {
                     var bgColor = GetBackgroundColorOfRectangle(image, box, 2);
+
+                    var lines = DetectLinesInRectangle(image, box);
+
                     //var rectangles = FindTextBlocksInsideRect(image, box);
                     //foreach (var rec in rectangles)
                     //{
@@ -353,8 +355,35 @@ namespace GC_Website.Detect
                     // Draw a green rectangle with thickness of 2
                     Cv2.Rectangle(image, box, new Scalar(0, 255, 0), 2);
 
+                    var  vlines = lines.Where(c => IsVertical(c.P1, c.P2, 0)).Select(c => new LineSegmentPoint(new Point(c.P1.X, c.P1.Y ), new Point(c.P2.X , c.P2.Y ))).ToList();
 
+
+                    var verticalLines = new List<LineSegmentPoint>();
+
+                    //foreach (var line in lines)
+                    //{
+                    //    if (IsVertical(line.P1, line.P2, 0))
+                    //    {
+                    //        // Offset coordinates back to the full image space
+                    //        Point originalP1 = new Point(line.P1.X + box.X, line.P1.Y + box.Y);
+                    //        Point originalP2 = new Point(line.P2.X + box.X, line.P2.Y + box.Y);
+                    //        //Cv2.Line(image, originalP1, originalP2, Scalar.Blue, 2);
+                    //        verticalLines.Add(new LineSegmentPoint(originalP1, originalP2));
+                    //    }
+                    //}
+                    verticalLines = removeDuplicatedLines(vlines, 10);
+
+                    foreach (var line in verticalLines)
+                    {
+                        // Offset coordinates back to the full image space
+                        Point originalP1 = new Point(line.P1.X + box.X, line.P1.Y + box.Y);
+                        Point originalP2 = new Point(line.P2.X + box.X, line.P2.Y + box.Y);
+                        Cv2.Line(image, originalP1, originalP2, Scalar.Red, 2);
+                        
+                    }
                 }
+
+
 
                 // 5. Save or display the result
                 Cv2.ImWrite(Path.Combine(Path.GetDirectoryName(item.FilePath), Path.GetFileNameWithoutExtension(item.FilePath) + "boxes" + Path.GetExtension(item.FilePath)), image);
@@ -366,6 +395,100 @@ namespace GC_Website.Detect
             return result;
 
         }
+
+        private bool IsVertical(Point p1, Point p2, double toleranceDegrees)
+        {
+            double deltaX = p2.X - p1.X;
+            double deltaY = p2.Y - p1.Y;
+
+            // If deltaX is 0, it's a completely straight vertical line
+            if (deltaX == 0) return true;
+
+            // Calculate the angle in degrees relative to the horizontal axis
+            double angleRad = Math.Atan2(Math.Abs(deltaY), Math.Abs(deltaX));
+            double angleDeg = angleRad * (180.0 / Math.PI);
+
+            // A vertical line is perpendicular to horizontal (90 degrees)
+            return Math.Abs(angleDeg - 90.0) <= toleranceDegrees;
+        }
+
+        /// <summary>
+        /// Detects lines only within the specified rectangular Region of Interest (ROI).
+        /// </summary>
+        /// <param name="src">The source image (modified in place with drawn lines).</param>
+        /// <param name="roiRect">The single rectangle defining the ROI.</param>
+        public List<LineSegmentPoint> DetectLinesInRectangle(Mat src, Rect roiRect)
+        {
+            List<LineSegmentPoint> result = new List<LineSegmentPoint>();
+            // 1. Safety check to ensure the rectangle fits within the image boundaries
+            if (roiRect.X < 0 || roiRect.Y < 0 ||
+                roiRect.X + roiRect.Width > src.Cols ||
+                roiRect.Y + roiRect.Height > src.Rows)
+            {
+                return default(List<LineSegmentPoint>); // Exit if the rectangle is out of bounds
+            }
+
+            // 2. Crop the image to the rectangle (ROI)
+            using (Mat roi = new Mat(src, roiRect))
+            using (Mat gray = new Mat())
+            using (Mat edges = new Mat())
+            {
+                // 3. Preprocess the ROI
+                Cv2.CvtColor(roi, gray, ColorConversionCodes.BGR2GRAY);
+                Cv2.Canny(gray, edges, 30, 90);
+
+                // 4. Detect lines inside the ROI using HoughLinesP
+                LineSegmentPoint[] lines = Cv2.HoughLinesP(
+                    edges,
+                    rho: 1,
+                    theta: Math.PI / 180,
+                    threshold: 10,
+                    minLineLength: 10,
+                    maxLineGap: 10
+                );
+
+                result.AddRange(lines);
+
+            }
+
+            result = result.OrderBy(x => x.P1.X).ToList();
+
+            return result;
+
+
+        }
+
+        private List<LineSegmentPoint> removeDuplicatedLines(List<LineSegmentPoint> lines, int v)
+        {
+            var result = new List<LineSegmentPoint>();
+            if (lines == null || lines.Count == 0)
+                return result;
+
+            // Neighbours must be adjacent in X for the comparison to work
+            var sorted = lines.OrderBy(l => l.P1.X).ToList();
+
+            var cluster = new List<LineSegmentPoint> { sorted[0] };
+
+            for (int i = 1; i < sorted.Count; i++)
+            {
+                if (Math.Abs(sorted[i].P1.X - sorted[i - 1].P1.X) < v)
+                {
+                    cluster.Add(sorted[i]);               // same group
+                }
+                else
+                {
+                    result.Add(cluster[cluster.Count / 2]); // one representative per group
+                    cluster.Clear();
+                    cluster.Add(sorted[i]);               // start a new group
+                }
+            }
+
+            // Flush the last group
+            result.Add(cluster[cluster.Count / 2]);
+
+            return result;
+        }
+
         public void FindWrongs(List<PageBoxModel> pages)
         {
             var leftAdses = new List<FlatBoxes>();
@@ -504,12 +627,12 @@ namespace GC_Website.Detect
                 Y = g.Y,
                 Width = g.Width,
                 Height = g.Height,
-                FileName= g.FileName,
+                FileName = g.FileName,
             }).ToList());
 
 
             foreach (var item in pageContent)
-            {                
+            {
                 var sameList = pageContent.Where(c => Math.Abs(c.X - item.X) < tolorance
                     || Math.Abs(c.Width - item.Width) < tolorance
                     || Math.Abs(c.Height - item.Height) < tolorance
@@ -539,7 +662,7 @@ namespace GC_Website.Detect
                 || (c.YSame >= 2 || c.WidthSame >= 2))
             .ToList();
 
-            wrongItems.AddRange( sameItems.Except(corectItsms).ToList());
+            wrongItems.AddRange(sameItems.Except(corectItsms).ToList());
 
             return wrongItems;
         }
